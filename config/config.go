@@ -1,72 +1,123 @@
 package config
 
 import (
+	"free-gpt3.5-2api/AccessTokenPool"
 	"free-gpt3.5-2api/common"
+	"github.com/donnie4w/go-logger/logger"
 	"github.com/joho/godotenv"
-	"net/url"
+	"gopkg.in/yaml.v3"
 	"os"
-	"strconv"
+	"path/filepath"
+	"strings"
 )
 
-type config struct {
+var (
 	LogLevel       string
+	LogPath        string
+	LogFile        string
 	Bind           string
 	Port           string
-	Proxy          *url.URL
+	Proxy          []string
+	TokensFile     string
 	AUTHORIZATIONS []string
-	PoolMaxCount   int
-	AuthED         int
-}
+	BaseUrl        string
+)
 
-var CONFIG *config
+type Tokens struct {
+	AccessTokens []*AccessTokenPool.AccessToken `yaml:"access_tokens,omitempty"`
+}
 
 func init() {
 	_ = godotenv.Load()
-	CONFIG = &config{}
+	// logger Options
+	LogOpts := &logger.Option{
+		Level:   logger.LEVEL_INFO,
+		Console: true,
+	}
+	// LOG_PATH
+	LogPath = os.Getenv("LOG_PATH")
+	if LogPath == "" {
+		LogPath = "logs"
+	}
+	// LOG_FILE
+	LogFile = os.Getenv("LOG_FILE")
+	if LogFile != "" {
+		LogFilename := filepath.Join(LogPath, LogFile)
+		LogOpts.FileOption = &logger.FileTimeMode{
+			Filename:   LogFilename,
+			Maxbuckup:  10,
+			IsCompress: true,
+			Timemode:   logger.MODE_DAY,
+		}
+	}
+	// LOG_LEVEL
+	LogLevel = os.Getenv("LOG_LEVEL")
+	switch LogLevel {
+	case "DEBUG":
+		LogOpts.Level = logger.LEVEL_DEBUG
+	case "INFO":
+		LogOpts.Level = logger.LEVEL_INFO
+	case "WARN":
+		LogOpts.Level = logger.LEVEL_WARN
+	case "ERROR":
+		LogOpts.Level = logger.LEVEL_ERROR
+	case "FATAL":
+		LogOpts.Level = logger.LEVEL_FATAL
+	default:
+		LogOpts.Level = logger.LEVEL_INFO
+	}
+	// set logger options
+	logger.SetOption(LogOpts)
+
 	// Bind
-	CONFIG.Bind = os.Getenv("BIND")
-	if CONFIG.Bind == "" {
-		CONFIG.Bind = "0.0.0.0"
+	Bind = os.Getenv("BIND")
+	if Bind == "" {
+		Bind = "0.0.0.0"
 	}
 	// PORT
-	CONFIG.Port = os.Getenv("PORT")
-	if CONFIG.Port == "" {
-		CONFIG.Port = "3040"
+	Port = os.Getenv("PORT")
+	if Port == "" {
+		Port = "3040"
 	}
 	// PROXY
 	proxy := os.Getenv("PROXY")
-	if proxy == "" {
-		CONFIG.Proxy = &url.URL{}
+	if proxy != "" {
+		Proxy = strings.Split(proxy, ",")
+	}
+	// ACCESS_TOKEN_FILE
+	accessTokensFile := os.Getenv("TOKENS_FILE")
+	if accessTokensFile == "" {
+		TokensFile = common.GetAbsPath("tokens.yml")
 	} else {
-		CONFIG.Proxy = common.ParseUrl(proxy)
+		TokensFile = common.GetAbsPath(accessTokensFile)
+	}
+	if common.IsFileExist(TokensFile) {
+		bytes, err := common.ReadFile(TokensFile)
+		if err != nil {
+			logger.Error("ReadFile error: ", err)
+		}
+		var tokens Tokens
+		if err = yaml.Unmarshal(bytes, &tokens); err != nil {
+			logger.Error("Unmarshal error: ", err)
+		}
+		for _, token := range tokens.AccessTokens {
+			token.Token = "Bearer " + token.Token
+		}
+		AccessTokenPool.GetAccAuthPoolInstance().AppendAccessTokens(tokens.AccessTokens)
 	}
 	// AUTH_TOKEN
 	authorizations := os.Getenv("AUTHORIZATIONS")
 	if authorizations == "" {
-		CONFIG.AUTHORIZATIONS = []string{}
+		panic("please add AUTHORIZATIONS in environment variable or .env file  (example: AUTHORIZATIONS=authkey1,authkey2)")
 	} else {
 		//以,分割 AUTH_TOKEN 并且为每个AUTH_TOKEN前面加上Bearer
-		CONFIG.AUTHORIZATIONS = common.SplitAndAddBearer(authorizations)
+		AUTHORIZATIONS = common.SplitAndAddPre("Bearer ", authorizations, ",")
 	}
-	// POOL_MAX_COUNT
-	poolMaxCount := os.Getenv("POOL_MAX_COUNT")
-	var err error
-	if poolMaxCount == "" {
-		CONFIG.PoolMaxCount = 64
+	// BASE_URL
+	BaseUrl = os.Getenv("BASE_URL")
+	if BaseUrl == "" {
+		BaseUrl = "https://chatgpt.com"
 	} else {
-		CONFIG.PoolMaxCount, err = strconv.Atoi(poolMaxCount)
-		if err != nil {
-			CONFIG.PoolMaxCount = 64
-		}
-	}
-	// AUTH_ED
-	authED := os.Getenv("AUTH_ED")
-	if authED == "" {
-		CONFIG.AuthED = 600
-	} else {
-		CONFIG.AuthED, err = strconv.Atoi(authED)
-		if err != nil {
-			CONFIG.AuthED = 600
-		}
+		BaseUrl = strings.TrimRight(BaseUrl, "/")
 	}
 }
